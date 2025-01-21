@@ -2,8 +2,10 @@ require 'erb'
 require 'json'
 require 'open-uri'
 require 'rss'
+require 'timezone'
 
 STORE = '028' # IKEA Portland
+TIMEZONE = Timezone['America/Los_Angeles']
 MAX_PAGE_SIZE = 64
 LINK_TEMPLATE = 'https://www.ikea.com/us/en/customer-service/shopping-at-ikea/as-is-online-pubce1eedc0/#/portland/%s'
 
@@ -39,6 +41,14 @@ class IkeaDiff
     previous_results.values_at(*deleted_ids)
   end
 
+  def grouped_added_items
+    @grouped_added_items ||= added_items.group_by { |item| [item['title'], item['description'], item['price']].join('/') }
+  end
+
+  def grouped_deleted_items
+    @grouped_deleted_items ||= deleted_items.group_by { |item| [item['title'], item['description'], item['price']].join('/') }
+  end
+
   def edited_items
     @edited_items ||= current_ids.filter_map do |id|
       current_result = current_results[id]
@@ -62,6 +72,10 @@ class IkeaDiff
     added_items.map { |item| item.merge('change_type' => 'added') } +
       deleted_items.map { |item| item.merge('change_type' => 'deleted') } +
       edited_items.map { |item| item.merge('change_type' => 'edited') }
+  end
+
+  def grouped_changed_items
+    @grouped_changed_items ||= changed_items.group_by { |item| [item['change_type'], item['title'], item['description'], item['price']].join('/') }
   end
 end
 
@@ -95,15 +109,15 @@ TXT_TEMPLATE = <<~TEMPLATE.chomp
   <% diff = revision[:diff] %>
   <% if diff.added_items.any? %>
   Added items:
-  <% diff.added_items.each do |item| %>
-  + <%= item['title'] %> (<%= '$%.2f' % item['price'] %>): <%= item['description'] %>
+  <% diff.grouped_added_items.each do |group, items| %>
+  + <%= items.count %>X <%= items[0]['title'] %> (<%= '$%.2f' % items[0]['price'] %>): <%= items[0]['description'] %>
   <% end %>
   <% end %>
 
   <% if diff.deleted_items.any? %>
   Deleted items:
-  <% diff.deleted_items.each do |item| %>
-  - <%= item['title'] %> (<%= '$%.2f' % item['price'] %>): <%= item['description'] %>
+  <% diff.grouped_deleted_items.each do |group, items| %>
+  + <%= items.count %>X <%= items[0]['title'] %> (<%= '$%.2f' % items[0]['price'] %>): <%= items[0]['description'] %>
   <% end %>
   <% end %>
 
@@ -125,7 +139,7 @@ file 'build/recent_changes.txt' => %w[build update] do |t|
     previous = JSON.parse(File.read(previous_file))['results']
     diff = IkeaDiff.new(previous, current)
 
-    { time: Time.parse(current_file.pathmap('%n')), diff: diff }
+    { time: Time.parse(current_file.pathmap('%n')).getlocal(TIMEZONE), diff: diff }
   end
 
   File.write(t.name, ERB.new(TXT_TEMPLATE, trim_mode: "<>").result(binding))
@@ -176,10 +190,16 @@ HTML_TEMPLATE = <<~TEMPLATE.chomp
 
     <% diff = revision[:diff] %>
     <div class="items">
-      <% diff.changed_items.each do |item| %>
+      <% diff.grouped_changed_items.each do |group, items| %>
+        <% item = items[0] %>
         <a href="<%= LINK_TEMPLATE % item['id'] %>" class='<%= item['change_type'] %> item'>
             <img src="<%= item['heroImage'] %>" alt="<%= item['title'] %>">
-          <h4 class='title'><%= item['title'] %></h4>
+          <h4 class='title'>
+            <%= item['title'] %>
+            <% if items.count > 1 %>
+              <span class='count'>x <%= items.count %></span>
+            <% end %>
+          </h4>
           <p class='description'><%= item['description'] %></p>
           <p class='discount-reason'><%= item['reasonDiscount'] %></p>
           <p class='price'>
@@ -200,7 +220,7 @@ file 'build/index.html' => %w[build update] do |t|
     previous = JSON.parse(File.read(previous_file))['results']
     diff = IkeaDiff.new(previous, current)
 
-    { time: Time.parse(current_file.pathmap('%n')), diff: diff }
+    { time: Time.parse(current_file.pathmap('%n')).getlocal(TIMEZONE), diff: diff }
   end
 
   File.write(t.name, ERB.new(HTML_TEMPLATE, trim_mode: "<>").result(binding))
@@ -212,7 +232,7 @@ file 'build/changes.atom' => %w[build update] do |t|
     previous = JSON.parse(File.read(previous_file))['results']
     diff = IkeaDiff.new(previous, current)
 
-    { time: Time.parse(current_file.pathmap('%n')), diff: diff }
+    { time: Time.parse(current_file.pathmap('%n')).getlocal(TIMEZONE), diff: diff }
   end
 
   rss = RSS::Maker.make("atom") do |maker|
@@ -251,7 +271,7 @@ file 'build/items.atom' => %w[build update] do |t|
   Dir.glob('data/*.json').last(10).reverse.each do |file|
     results = JSON.parse(File.read(file))['results']
     results.each do |item|
-      item_first_seen[item['id']] ||= Time.parse(file.pathmap('%n')).to_s
+      item_first_seen[item['id']] ||= Time.parse(file.pathmap('%n')).getlocal(TIMEZONE).to_s
     end
   end
 
