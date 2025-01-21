@@ -1,0 +1,18 @@
+GEM
+  remote: https://rubygems.org/
+  specs:
+    rake (13.2.1)
+    rexml (3.4.0)
+    rss (0.3.1)
+      rexml
+
+PLATFORMS
+  arm64-darwin-24
+  ruby
+
+DEPENDENCIES
+  rake (~> 13.2)
+  rss (~> 0.3.1)
+
+BUNDLED WITH
+   2.6.2
